@@ -12712,8 +12712,9 @@ class OptimizedCryptoBotGUI(QtWidgets.QMainWindow):
         super().__init__()
         try:
             self.setWindowTitle("Crypto Bot Pro v35.0.0.0 - Propiedad Intelectual de Marketeradolfo")
-            self.setGeometry(100, 100, 1400, 800)
-            self.setStyleSheet("background-color: #0f0f23; color: white;")
+            self.setGeometry(100, 100, 1480, 880)
+            self.setMinimumSize(1320, 760)
+            self.setStyleSheet(self._build_modern_stylesheet())
             self.config = config_instance
             self.bot = OptimizedTradingBot(self.config)
             self.bot.gui_queue = self.gui_queue = queue.Queue()
@@ -12752,6 +12753,100 @@ class OptimizedCryptoBotGUI(QtWidgets.QMainWindow):
             logger.error(f"Error inicializando GUI optimizada: {e}")
             QtWidgets.QMessageBox.critical(None, "Error", f"Error inicializando la interfaz: {str(e)}")
             raise
+
+    def _build_modern_stylesheet(self) -> str:
+        """Tema visual global mejorado para toda la aplicación."""
+        return """
+            QMainWindow, QWidget {
+                background-color: #0b1020;
+                color: #e6edf7;
+                font-family: 'Segoe UI', Arial, sans-serif;
+                font-size: 10pt;
+            }
+            QFrame {
+                border-radius: 10px;
+            }
+            QLabel {
+                color: #dce7ff;
+            }
+            QPushButton {
+                background-color: #1c3f70;
+                color: #f3f8ff;
+                border: 1px solid #295d9a;
+                border-radius: 8px;
+                padding: 7px 12px;
+                font-weight: 600;
+            }
+            QPushButton:hover {
+                background-color: #23518f;
+                border-color: #3d78bf;
+            }
+            QPushButton:pressed {
+                background-color: #183a67;
+            }
+            QPushButton:disabled {
+                background-color: #2a2f3a;
+                color: #7a8496;
+                border-color: #3d4454;
+            }
+            QLineEdit, QTextEdit, QListWidget, QTableWidget, QTextBrowser {
+                background-color: #0f172a;
+                border: 1px solid #223456;
+                border-radius: 8px;
+                color: #eaf2ff;
+                selection-background-color: #00d4aa;
+                selection-color: #081018;
+            }
+            QHeaderView::section {
+                background-color: #16213e;
+                color: #79f2da;
+                border: 1px solid #243a66;
+                padding: 6px;
+                font-weight: 700;
+            }
+            QScrollBar:vertical {
+                width: 10px;
+                background: #101827;
+                border-radius: 5px;
+            }
+            QScrollBar::handle:vertical {
+                background: #274978;
+                border-radius: 5px;
+                min-height: 20px;
+            }
+            QTabWidget::pane {
+                border: 1px solid #1f3153;
+                border-radius: 10px;
+                margin-top: 6px;
+                background: #0d1427;
+            }
+            QTabBar::tab {
+                background: #16213e;
+                color: #b8c7e6;
+                padding: 10px 16px;
+                margin-right: 3px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                min-width: 140px;
+            }
+            QTabBar::tab:selected {
+                background: #00d4aa;
+                color: #061018;
+                font-weight: 700;
+            }
+            QProgressBar {
+                border: 1px solid #2f4d80;
+                border-radius: 8px;
+                text-align: center;
+                background: #101a30;
+                color: #eaf2ff;
+                min-height: 24px;
+            }
+            QProgressBar::chunk {
+                border-radius: 7px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #00d4aa, stop:1 #47b4ff);
+            }
+        """
 
     def _on_cleanup_timer(self):
         try:
@@ -13089,65 +13184,104 @@ analizando datos en tiempo real cada 2 segundos.</p>
         dialog.exec_()
 
     def _init_header(self):
-        """Inicializar header optimizado"""
-        header_widget = QtWidgets.QWidget()
+        """Inicializar header optimizado con mejor jerarquía visual."""
+        header_widget = QtWidgets.QFrame()
+        header_widget.setStyleSheet(
+            "QFrame {"
+            "background-color: #101a33;"
+            "border: 1px solid #1f3a67;"
+            "border-radius: 12px;"
+            "padding: 6px;"
+            "}"
+        )
+
         header_layout = QtWidgets.QHBoxLayout(header_widget)
+        header_layout.setContentsMargins(14, 10, 14, 10)
+        header_layout.setSpacing(14)
+
         title_widget = QtWidgets.QWidget()
         title_layout = QtWidgets.QVBoxLayout(title_widget)
-        title_label = QtWidgets.QLabel("🚀 Crypto Bot Pro v35.0.0.0 - Desarrolado por Lic: Adolfo Daniel Aguirre")
-        title_label.setFont(QtGui.QFont("Arial", 14, QtGui.QFont.Bold))
-        title_label.setStyleSheet("color: #00d4aa;")
+        title_layout.setContentsMargins(0, 0, 0, 0)
+        title_layout.setSpacing(3)
+
+        title_label = QtWidgets.QLabel("🚀 Crypto Bot Pro v35.0.0.0 · IA + Análisis Técnico")
+        title_label.setFont(QtGui.QFont("Segoe UI", 15, QtGui.QFont.Bold))
+        title_label.setStyleSheet("color: #00f0c8;")
+        title_label.setWordWrap(True)
         title_layout.addWidget(title_label)
-        subtitle_label = QtWidgets.QLabel("Sistema Avanzado de Trading con IA - Versión Profesional")
-        subtitle_label.setFont(QtGui.QFont("Arial", 10))
-        subtitle_label.setStyleSheet("color: #b0b0b0;")
+
+        subtitle_label = QtWidgets.QLabel("Sistema Profesional de Trading · Desarrollado por Lic. Adolfo Daniel Aguirre")
+        subtitle_label.setFont(QtGui.QFont("Segoe UI", 10))
+        subtitle_label.setStyleSheet("color: #9fb3d9;")
+        subtitle_label.setWordWrap(True)
         title_layout.addWidget(subtitle_label)
-        header_layout.addWidget(title_widget)
-        # Controles
+
+        header_layout.addWidget(title_widget, 3)
+
         controls_widget = QtWidgets.QWidget()
         controls_layout = QtWidgets.QHBoxLayout(controls_widget)
-        # Estado
-        status_widget = QtWidgets.QWidget()
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(10)
+
+        status_widget = QtWidgets.QFrame()
+        status_widget.setStyleSheet("QFrame { background-color: #0f1b34; border: 1px solid #2a4a80; border-radius: 10px; }")
         status_layout = QtWidgets.QVBoxLayout(status_widget)
-        status_layout.addWidget(QtWidgets.QLabel("Estado:"))
-        self.status_label = QtWidgets.QLabel("Detenido")
-        self.status_label.setStyleSheet("color: red;")
+        status_layout.setContentsMargins(10, 6, 10, 6)
+        status_layout.setSpacing(2)
+
+        status_title = QtWidgets.QLabel("Estado")
+        status_title.setStyleSheet("color: #a6bddf; font-weight: 600;")
+        status_layout.addWidget(status_title)
+
+        self.status_label = QtWidgets.QLabel("⏹️ Detenido")
+        self.status_label.setStyleSheet("color: #ff7b7b; font-weight: 700;")
         status_layout.addWidget(self.status_label)
         controls_layout.addWidget(status_widget)
-        # Botones
-        self.start_btn = QtWidgets.QPushButton("▶️ Iniciar Bot Optimizado")
-        self.start_btn.setStyleSheet("background-color: #52b788; color: white; padding: 8px;")
+
+        self.start_btn = QtWidgets.QPushButton("▶ Iniciar Bot")
+        self.start_btn.setMinimumHeight(36)
+        self.start_btn.setStyleSheet(
+            "QPushButton { background-color: #1f8f66; border-color: #38c087; color: white; font-weight: 700; }"
+            "QPushButton:hover { background-color: #27a877; }"
+        )
         self.start_btn.clicked.connect(self.start_bot_optimized)
         controls_layout.addWidget(self.start_btn)
-        self.stop_btn = QtWidgets.QPushButton("⏹️ Detener Bot")
-        self.stop_btn.setStyleSheet("background-color: #dc2f02; color: white; padding: 8px;")
+
+        self.stop_btn = QtWidgets.QPushButton("■ Detener Bot")
+        self.stop_btn.setMinimumHeight(36)
+        self.stop_btn.setStyleSheet(
+            "QPushButton { background-color: #bd3a2f; border-color: #df5a4f; color: white; font-weight: 700; }"
+            "QPushButton:hover { background-color: #d4493d; }"
+        )
         self.stop_btn.clicked.connect(self.stop_bot_optimized)
         self.stop_btn.setEnabled(False)
         controls_layout.addWidget(self.stop_btn)
 
-        # ✅ NUEVO: Indicador FIX API en tiempo real
-        fix_api_widget = QtWidgets.QWidget()
+        fix_api_widget = QtWidgets.QFrame()
+        fix_api_widget.setStyleSheet("QFrame { background-color: #0f1b34; border: 1px solid #2a4a80; border-radius: 10px; }")
         fix_api_layout = QtWidgets.QVBoxLayout(fix_api_widget)
-        fix_api_layout.setContentsMargins(10, 0, 10, 0)
-        fix_api_label = QtWidgets.QLabel("FIX API:")
-        fix_api_label.setFont(QtGui.QFont("Arial", 9, QtGui.QFont.Bold))
+        fix_api_layout.setContentsMargins(10, 6, 10, 6)
+        fix_api_layout.setSpacing(3)
+
+        fix_api_label = QtWidgets.QLabel("FIX API")
+        fix_api_label.setFont(QtGui.QFont("Segoe UI", 9, QtGui.QFont.Bold))
         fix_api_label.setStyleSheet("color: #00d4aa;")
         fix_api_layout.addWidget(fix_api_label)
 
-        # Botón indicador (cambia color según estado)
         self.fix_api_indicator = QtWidgets.QPushButton("⚫ Inactivo")
         self.fix_api_indicator.setStyleSheet(
-            "background-color: #555; color: white; padding: 6px 12px; "
-            "border-radius: 12px; font-weight: bold; border: 2px solid #666;"
+            "QPushButton {"
+            "background-color: #5a6578; color: white; padding: 5px 10px;"
+            "border-radius: 12px; font-weight: 700; border: 1px solid #6f7d96;"
+            "}"
         )
-        self.fix_api_indicator.setMaximumWidth(150)
-        self.fix_api_indicator.setEnabled(False)  # No clickeable, solo indicador
+        self.fix_api_indicator.setMinimumWidth(130)
+        self.fix_api_indicator.setEnabled(False)
         fix_api_layout.addWidget(self.fix_api_indicator)
         controls_layout.addWidget(fix_api_widget)
 
-        header_layout.addWidget(controls_widget)
+        header_layout.addWidget(controls_widget, 2)
         self.main_layout.addWidget(header_widget)
-        header_widget.setStyleSheet("background-color: #16213e; border: 2px solid #1a2a4c; border-radius: 5px;")
 
     def _process_high_quality_signal(self, symbol: str, df_primary: pd.DataFrame, df_entry: pd.DataFrame, analysis_result: dict):
         """
@@ -13251,12 +13385,10 @@ analizando datos en tiempo real cada 2 segundos.</p>
     def _init_tabs(self):
         """Inicializar pestañas optimizadas"""
         self.notebook = QtWidgets.QTabWidget()
-        self.notebook.setStyleSheet(
-            "QTabWidget::pane { border: 0; }"
-            "QTabBar::tab { background: #16213e; color: #b0b0b0; padding: 10px; "
-            "border-top-left-radius: 5px; border-top-right-radius: 5px; }"
-            "QTabBar::tab:selected { background: #00d4aa; color: black; }"
-        )
+        self.notebook.setDocumentMode(True)
+        self.notebook.setElideMode(QtCore.Qt.ElideRight)
+        self.notebook.tabBar().setExpanding(False)
+        self.notebook.setUsesScrollButtons(True)
         # Conectar el evento de cambio de pestaña
         self.notebook.currentChanged.connect(self.on_tab_changed)
         # Pestañas principales
@@ -13273,18 +13405,28 @@ analizando datos en tiempo real cada 2 segundos.</p>
         self.main_layout.addWidget(self.notebook)
 
     def _create_titled_frame(self, title_text, parent_widget):
-        """Crear frame con título"""
+        """Crear frame con título y espaciado consistente sin solapamientos."""
         frame = QtWidgets.QFrame(parent_widget)
         frame.setFrameShape(QtWidgets.QFrame.StyledPanel)
-        frame.setStyleSheet("QFrame { background-color: #16213e; border: 1px solid #1a2a4c; border-radius: 5px; }")
+        frame.setStyleSheet(
+            "QFrame { background-color: #121f3b; border: 1px solid #274475; border-radius: 10px; }"
+        )
+
         layout = QtWidgets.QVBoxLayout(frame)
-        layout.setContentsMargins(10, 20, 10, 10)
-        title_label = QtWidgets.QLabel(title_text, frame)
-        title_label.setFont(QtGui.QFont("Arial", 11, QtGui.QFont.Bold))
-        title_label.setStyleSheet("color: #00d4aa; background-color: transparent; border: none; padding: 5px;")
-        title_label.move(10, -10)
-        title_label.adjustSize()
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(8)
+
+        if title_text:
+            title_label = QtWidgets.QLabel(title_text, frame)
+            title_label.setFont(QtGui.QFont("Segoe UI", 11, QtGui.QFont.Bold))
+            title_label.setStyleSheet(
+                "color: #00e3bc; background-color: transparent; border: none; padding: 2px 0px;"
+            )
+            title_label.setWordWrap(True)
+            layout.addWidget(title_label)
+
         content_layout = QtWidgets.QVBoxLayout()
+        content_layout.setSpacing(8)
         layout.addLayout(content_layout)
         return frame, content_layout
 
@@ -13292,7 +13434,8 @@ analizando datos en tiempo real cada 2 segundos.</p>
         """Crear pestaña de trading optimizada"""
         tab_widget = QtWidgets.QWidget()
         tab_layout = QtWidgets.QHBoxLayout(tab_widget)
-        tab_layout.setSpacing(10)
+        tab_layout.setContentsMargins(8, 8, 8, 8)
+        tab_layout.setSpacing(12)
         # Panel izquierdo - Pares
         left_panel = QtWidgets.QWidget()
         left_layout = QtWidgets.QVBoxLayout(left_panel)
@@ -13330,13 +13473,14 @@ analizando datos en tiempo real cada 2 segundos.</p>
         self.combined_prob_label.setFont(QtGui.QFont("Arial", 32, QtGui.QFont.Bold))
         self.combined_prob_label.setStyleSheet(
             "color: #ffffff; background-color: #16213e; border: 3px solid #00d4aa; "
-            "border-radius: 15px; padding: 15px; min-height: 80px;"
+            "border-radius: 15px; padding: 12px 18px; min-height: 92px;"
         )
         prob_h_layout.addWidget(self.combined_prob_label)
         # Panel de detalles de señal
         signal_details_layout = QtWidgets.QVBoxLayout()
         prob_h_layout.addLayout(signal_details_layout)
         self.signal_type_label = QtWidgets.QLabel("NEUTRAL")
+        self.signal_type_label.setMinimumHeight(48)
         self.signal_type_label.setAlignment(QtCore.Qt.AlignCenter)
         self.signal_type_label.setFont(QtGui.QFont("Arial", 18, QtGui.QFont.Bold))
         self.signal_type_label.setStyleSheet(
@@ -13387,7 +13531,8 @@ analizando datos en tiempo real cada 2 segundos.</p>
         details_frame, details_layout = self._create_titled_frame("📊 Detalles Optimizados", center_panel)
         self.signal_text = QtWidgets.QTextEdit()
         self.signal_text.setReadOnly(True)
-        self.signal_text.setMaximumHeight(150)  # Más compacto
+        self.signal_text.setMinimumHeight(170)
+        self.signal_text.setMaximumHeight(230)
         self.signal_text.setStyleSheet("background-color: #0f0f23; color: white; border: 1px solid #1a2a4c;")
         details_layout.addWidget(self.signal_text)
         center_layout.addWidget(details_frame)
@@ -13481,6 +13626,7 @@ analizando datos en tiempo real cada 2 segundos.</p>
 
         # Terminal de logs
         self.terminal_text = QtWidgets.QTextEdit()
+        self.terminal_text.setMinimumHeight(220)
         self.terminal_text.setReadOnly(True)
         self.terminal_text.setStyleSheet("background-color: #0f0f23; color: #00d4aa; border: 1px solid #1a2a4c;")
         terminal_layout.addWidget(self.terminal_text)
