@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>TradingView Chart</title>
+    <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            background-color: #0f0f23; 
+            font-family: Arial, sans-serif;
+            overflow: hidden;
+        }
+        #chart-container { 
+            width: 100%; 
+            height: 100vh;
+        }
+    </style>
+</head>
+<body>
+    <div id="chart-container"></div>
+
+    <script>
+        let chart = null;
+        let candleSeries = null;
+        let entryLine = null;
+        let slLine = null;
+        let tpLine = null;
+        let volumeSeries = null;
+
+        function initChart() {
+            const container = document.getElementById('chart-container');
+
+            chart = LightweightCharts.createChart(container, {
+                width: container.clientWidth,
+                height: container.clientHeight,
+                layout: {
+                    background: { type: 'solid', color: '#0f0f23' },
+                    textColor: '#d1d4dc',
+                },
+                grid: {
+                    vertLines: { color: '#1a2a4c' },
+                    horzLines: { color: '#1a2a4c' },
+                },
+                crosshair: {
+                    mode: LightweightCharts.CrosshairMode.Normal,
+                },
+                rightPriceScale: {
+                    borderColor: '#485c7b',
+                    scaleMargins: { top: 0.1, bottom: 0.2 },
+                },
+                timeScale: {
+                    borderColor: '#485c7b',
+                    timeVisible: true,
+                    secondsVisible: false,
+                },
+            });
+
+            candleSeries = chart.addCandlestickSeries({
+                upColor: '#4CAF50',
+                downColor: '#D32F2F',
+                borderDownColor: '#D32F2F',
+                borderUpColor: '#4CAF50',
+                wickDownColor: '#D32F2F',
+                wickUpColor: '#4CAF50',
+            });
+
+            volumeSeries = chart.addHistogramSeries({
+                color: '#26a69a',
+                priceFormat: { type: 'volume' },
+                priceScaleId: '',
+                scaleMargins: { top: 0.85, bottom: 0 },
+            });
+
+            window.addEventListener('resize', () => {
+                chart.applyOptions({
+                    width: container.clientWidth,
+                    height: container.clientHeight
+                });
+            });
+        }
+
+        function loadCandles(candleData) {
+            if (!candleSeries) return;
+            candleSeries.setData(candleData);
+            chart.timeScale().fitContent();
+        }
+
+        function loadVolume(volumeData) {
+            if (!volumeSeries) return;
+            volumeSeries.setData(volumeData);
+        }
+
+        function updateCandle(candle) {
+            if (!candleSeries) return;
+            candleSeries.update(candle);
+        }
+
+        function setEntryLine(price, label) {
+            if (entryLine) {
+                candleSeries.removePriceLine(entryLine);
+            }
+            entryLine = candleSeries.createPriceLine({
+                price: price,
+                color: '#2196F3',
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Solid,
+                axisLabelVisible: true,
+                title: label || 'ENTRY',
+            });
+        }
+
+        function setStopLossLine(price, label) {
+            if (slLine) {
+                candleSeries.removePriceLine(slLine);
+            }
+            slLine = candleSeries.createPriceLine({
+                price: price,
+                color: '#D32F2F',
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                axisLabelVisible: true,
+                title: label || 'SL',
+            });
+        }
+
+        function setTakeProfitLine(price, label) {
+            if (tpLine) {
+                candleSeries.removePriceLine(tpLine);
+            }
+            tpLine = candleSeries.createPriceLine({
+                price: price,
+                color: '#4CAF50',
+                lineWidth: 2,
+                lineStyle: LightweightCharts.LineStyle.Dashed,
+                axisLabelVisible: true,
+                title: label || 'TP',
+            });
+        }
+
+        function setPriceLines(entry, sl, tp, slLabel, tpLabel) {
+            setEntryLine(entry, 'ENTRY');
+            setStopLossLine(sl, slLabel || 'SL');
+            setTakeProfitLine(tp, tpLabel || 'TP');
+        }
+
+        function clearChart() {
+            if (candleSeries) {
+                candleSeries.setData([]);
+            }
+            if (volumeSeries) {
+                volumeSeries.setData([]);
+            }
+        }
+
+        initChart();
+    </script>
+</body>
+</html>

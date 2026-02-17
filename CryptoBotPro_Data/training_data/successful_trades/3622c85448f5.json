@@ -1,0 +1,11 @@
+{
+  "signal_hash": "3622c85448f5",
+  "symbol": "IOTAUSDT",
+  "signal_type": "SignalType.CONFIRMED_SELL",
+  "entry_price": 0.0869,
+  "exit_price": 0.0842,
+  "final_profit_percent": 3.107019562715774,
+  "duration_minutes": 534.5433066333333,
+  "is_success": true,
+  "timestamp": "2026-01-25T13:06:27.482766"
+}
