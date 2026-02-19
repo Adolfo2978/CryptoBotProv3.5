@@ -7417,6 +7417,9 @@ class OptimizedTelegramClient:
         self.sent_signals = set()
         self.sent_promotions = set()  # Control de promociones enviadas por par
         self.sent_milestones = {}  # {symbol: set(milestones_enviados)}
+        self.sent_closures = set()  # {(symbol, reason_norm)}
+        self.sent_highlight_expired = set()  # {symbol}
+        self.telegram_dedupe_lock = threading.Lock()
 
         # Cola de mensajes para envio no bloqueante
         self.message_queue = queue.Queue(maxsize=100)
@@ -7981,6 +7984,11 @@ class OptimizedTelegramClient:
             logger.debug(f"⏭️ Promoción ya enviada para {symbol}, omitiendo duplicado")
             return True
 
+        # Dedupe fuerte por evento
+        if not self._dedupe_once(("PROMOTION", symbol)):
+            logger.debug(f"⏭️ Evento PROMOTION duplicado para {symbol}")
+            return True
+
         try:
             escaped_symbol = self._escape_html(symbol)
 
@@ -8020,24 +8028,18 @@ class OptimizedTelegramClient:
 
             message = self._truncate_message(message)
 
-            # Enviar mensaje con gráfico si existe
+            # SOLO UN ENVÍO: foto con caption o texto (nunca ambos)
+            sent_ok = False
             if chart_path and os.path.exists(chart_path):
-                # Preparar caption para la foto
-                caption = f"📊 {escaped_symbol} - CONFIRMADA"
-                photo_sent = self.send_photo(chart_path, caption)
-                if photo_sent:
-                    # Enviar también el mensaje detallado
-                    self._send_message_direct(message)
-                    self.sent_promotions.add(symbol)
-                    logger.info(f"✅ {symbol} promoción CONFIRMADA enviada con gráfico")
-                    return True
+                sent_ok = self.send_photo(chart_path, message, parse_mode='HTML')
 
-            # Fallback: solo texto si no hay gráfico
-            text_sent = self._send_message_direct(message)
-            if text_sent:
+            if not sent_ok:
+                sent_ok = self._send_message_direct(message)
+
+            if sent_ok:
                 self.sent_promotions.add(symbol)
-                logger.info(f"✅ {symbol} promoción CONFIRMADA enviada (sin gráfico)")
-            return text_sent
+                logger.info(f"✅ {symbol} promoción CONFIRMADA enviada (1 solo mensaje)")
+            return sent_ok
 
         except Exception as e:
             logger.error(f"❌ Error enviando promoción para {symbol}: {e}")
@@ -8049,6 +8051,11 @@ class OptimizedTelegramClient:
 
         # Limpiar promoción enviada para permitir futuras promociones del mismo par
         self.sent_promotions.discard(symbol)
+
+        reason_key = self._normalize_reason_key(reason)
+        if not self._dedupe_once(("CLOSURE", symbol, reason_key)):
+            logger.debug(f"⏭️ Cierre duplicado omitido para {symbol} ({reason_key})")
+            return True
 
         try:
             if reason == 'target_reached':
@@ -8112,19 +8119,41 @@ class OptimizedTelegramClient:
                 )
 
             caption = self._truncate_message(caption)
-            text_sent = self.send_message(caption)
 
-            # 🔥 MEJORADO: Intentar enviar gráfico si existe o crear uno nuevo
-            if text_sent:
-                if chart_path and os.path.exists(chart_path):
-                    self.send_photo(chart_path, caption)
-                else:
-                    # Si no existe chart, intentar generarlo para este cierre
-                    logger.info(f"📊 Enviando gráfico final para {symbol} al cerrar")
-            return text_sent
+            # SOLO UN ENVÍO: foto con caption o texto (nunca ambos)
+            sent_ok = False
+            if chart_path and os.path.exists(chart_path):
+                sent_ok = self.send_photo(chart_path, caption, parse_mode='HTML')
+            if not sent_ok:
+                sent_ok = self.send_message(caption, parse_mode='HTML')
+            return sent_ok
         except Exception as e:
             logger.error(f"Error enviando cierre: {e}")
             return False
+
+    def _normalize_reason_key(self, reason: str) -> str:
+        """Normaliza razones de cierre para evitar duplicados con alias."""
+        r = str(reason or '').strip().upper()
+        reason_map = {
+            "TARGET_REACHED": "PROFIT_TARGET",
+            "TAKE_PROFIT": "PROFIT_TARGET",
+            "TP_REACHED": "PROFIT_TARGET",
+            "STOP_LOSS_HIT": "STOP_LOSS",
+            "SL_HIT": "STOP_LOSS",
+            "TREND_REVERSAL_DETECTED": "TREND_REVERSAL",
+            "TREND_CHANGE_PARTIAL": "PARTIAL_TARGET",
+        }
+        return reason_map.get(r, r)
+
+    def _dedupe_once(self, key: tuple) -> bool:
+        """Retorna True si el evento es nuevo; False si ya fue enviado antes."""
+        with self.telegram_dedupe_lock:
+            if not hasattr(self, '_sent_event_keys'):
+                self._sent_event_keys = set()
+            if key in self._sent_event_keys:
+                return False
+            self._sent_event_keys.add(key)
+            return True
 
 
     def test_connection(self) -> bool:
@@ -8152,6 +8181,16 @@ class OptimizedTelegramClient:
             m3 = getattr(self.config, 'MILESTONE_3', 1.5)
             sl_pct = getattr(self.config, 'DEFAULT_STOP_LOSS_PERCENT', 0.01) * 100
 
+            # Evitar duplicar la notificación final: objetivo lo informa el cierre
+            if milestone >= m3:
+                logger.debug(f"⏭️ Milestone objetivo omitido para {symbol}; lo informa el cierre")
+                return True
+
+            milestone_key = round(float(milestone), 4)
+            if not self._dedupe_once(("MILESTONE", symbol, milestone_key)):
+                logger.debug(f"⏭️ Milestone duplicado omitido para {symbol} ({milestone_key})")
+                return True
+
             # Determinar qué milestone es y cuál es el próximo
             if milestone >= m3:
                 emoji = "🎯"
@@ -8177,11 +8216,14 @@ class OptimizedTelegramClient:
                 f"⏱️ {datetime.now().strftime('%H:%M:%S')}"
             )
             text = self._truncate_message(text)
-            text_sent = self.send_message(text, parse_mode='HTML')
-            if text_sent and chart_path and os.path.exists(chart_path):
-                caption = f"📊 {symbol} — +{milestone:.1f}%\n💰 Profit: {profit:+.2f}% | TP: {m3:.1f}% | SL: -{sl_pct:.1f}%"
-                self.send_photo(photo_path=chart_path, caption=caption, parse_mode='HTML')
-            return text_sent
+
+            # SOLO UN ENVÍO: foto con caption o texto
+            sent_ok = False
+            if chart_path and os.path.exists(chart_path):
+                sent_ok = self.send_photo(photo_path=chart_path, caption=text, parse_mode='HTML')
+            if not sent_ok:
+                sent_ok = self.send_message(text, parse_mode='HTML')
+            return sent_ok
         except Exception as e:
             logger.error(f"Error enviando Avance {milestone}%: {e}")
             return False
@@ -8190,6 +8232,11 @@ class OptimizedTelegramClient:
         """Enviar notificación cuando una señal DESTACADA expira sin confirmarse"""
         if not self.config.telegram_enabled:
             return False
+
+        if not self._dedupe_once(("HIGHLIGHT_EXPIRED", symbol)):
+            logger.debug(f"⏭️ HIGHLIGHT_EXPIRED duplicado omitido para {symbol}")
+            return True
+
         try:
             escaped_symbol = self._escape_html(symbol)
             text = (
