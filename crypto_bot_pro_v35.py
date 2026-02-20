@@ -630,6 +630,10 @@ class AdvancedTradingConfig:
         self.MIN_NEURAL_VALIDATION = 88.0
         self.MIN_VOLUME_RATIO = 1.2  # Aumentado de 0.8 a 1.2 (+50%)
         self.MIN_RISK_REWARD_RATIO = 1.75  # Aumentado para priorizar setups más robustos
+        self.ENABLE_MM_BUY_FILTER = True  # Filtro Market Maker Buy Model
+        self.MM_MIN_SCORE = 65.0
+        self.MM_PULLBACK_MIN = 0.25
+        self.MM_PULLBACK_MAX = 0.72
         self.MAX_RISK_PER_TRADE = 0.02
         self.NEURAL_WEIGHT = 0.5
         self.TECHNICAL_WEIGHT = 0.5
@@ -4114,6 +4118,103 @@ class OptimizedTechnicalAnalyzer:
             logger.error(f"Error en evaluate_entry_setup: {e}\n{tb}")
             return {'valid': True, 'grade': 'N/A', 'reason': f'Error: {e}', 'text': f"🎯 Entrada: N/A ({str(e)[:40]})"}
 
+    def evaluate_mm_buy_setup(self, df_entry: pd.DataFrame, market_direction: str, atr: Optional[float] = None) -> dict:
+        """
+        Market Maker Buy Model (spot/perpetual):
+        - Impulso inicial
+        - Retroceso controlado (pullback)
+        - Spring/liquidity sweep en mínimos recientes
+        - Recuperación rápida de EMA21 con volumen
+        """
+        try:
+            if df_entry is None or len(df_entry) < 40:
+                return {'valid': False, 'score': 0.0, 'reason': 'Datos insuficientes MM', 'spring_detected': False}
+
+            d = df_entry.tail(40).copy()
+            c = pd.to_numeric(d['close'], errors='coerce')
+            h = pd.to_numeric(d['high'], errors='coerce')
+            l = pd.to_numeric(d['low'], errors='coerce')
+            o = pd.to_numeric(d['open'], errors='coerce')
+            v = pd.to_numeric(d['volume'], errors='coerce').fillna(0)
+
+            if hasattr(atr, 'iloc'):
+                atr_val = float(atr.iloc[-1]) if len(atr) else 0.0
+            elif atr is not None:
+                atr_val = float(atr)
+            else:
+                atr_series = self.calculate_atr(d, 14)
+                atr_val = float(atr_series.iloc[-1]) if len(atr_series) else 0.0
+
+            if atr_val <= 1e-12:
+                return {'valid': False, 'score': 0.0, 'reason': 'ATR inválido MM', 'spring_detected': False}
+
+            ema21 = self.calculate_ema(c, 21, "mm_buy")
+            ema_val = float(ema21.iloc[-1]) if len(ema21) else float(c.iloc[-1])
+
+            # Impulso previo (últimas ~20 velas excluyendo la actual)
+            prior = d.iloc[-21:-1]
+            if len(prior) < 8:
+                return {'valid': False, 'score': 0.0, 'reason': 'Impulso insuficiente MM', 'spring_detected': False}
+            impulse_low = float(prior['low'].min())
+            impulse_high = float(prior['high'].max())
+            impulse_move = max(1e-12, impulse_high - impulse_low)
+
+            # Retroceso desde máximo del impulso hasta mínimo reciente
+            pullback_low = float(d.iloc[-8:]['low'].min())
+            pullback_ratio = (impulse_high - pullback_low) / impulse_move
+
+            pb_min = float(getattr(self.config, 'MM_PULLBACK_MIN', 0.25))
+            pb_max = float(getattr(self.config, 'MM_PULLBACK_MAX', 0.72))
+            pullback_ok = pb_min <= pullback_ratio <= pb_max
+
+            # Spring: barrer mínimos recientes y cerrar por encima
+            recent_support = float(d.iloc[-20:-2]['low'].min()) if len(d) >= 22 else float(d['low'].min())
+            last = d.iloc[-1]
+            spring_detected = (float(last['low']) < recent_support) and (float(last['close']) > recent_support)
+
+            # Recuperación sobre EMA y cuerpo alcista
+            reclaim_ema = float(last['close']) >= ema_val and float(last['close']) > float(last['open'])
+
+            # Volumen confirmatorio
+            vol_mean = float(v.tail(20).mean()) if len(v) >= 20 else float(v.mean())
+            vol_ok = vol_mean > 0 and float(last['volume']) >= vol_mean * 1.15
+
+            # Filtro de contexto: evitar entrar contra tendencia macro demasiado bajista
+            macro_ok = (market_direction or 'NEUTRAL').upper() in ('BULLISH', 'NEUTRAL')
+
+            score = 0.0
+            if pullback_ok:
+                score += 25
+            if spring_detected:
+                score += 30
+            if reclaim_ema:
+                score += 25
+            if vol_ok:
+                score += 15
+            if macro_ok:
+                score += 5
+
+            mm_min = float(getattr(self.config, 'MM_MIN_SCORE', 65.0))
+            valid = score >= mm_min and (spring_detected or reclaim_ema)
+
+            reason = (
+                f"MM score={score:.1f} | pullback={pullback_ratio:.2f} | "
+                f"spring={'SI' if spring_detected else 'NO'} | vol={'OK' if vol_ok else 'BAJO'}"
+            )
+
+            return {
+                'valid': valid,
+                'score': float(score),
+                'reason': reason,
+                'spring_detected': spring_detected,
+                'pullback_ratio': float(pullback_ratio),
+                'reclaim_ema': reclaim_ema,
+                'volume_ok': vol_ok
+            }
+        except Exception as e:
+            logger.debug(f"Error en evaluate_mm_buy_setup: {e}")
+            return {'valid': False, 'score': 0.0, 'reason': f'Error MM: {e}', 'spring_detected': False}
+
     def detect_w_m_pattern(self, df: pd.DataFrame) -> dict:
         """
         Detecta patrones W (doble suelo) y M (doble techo) con volumen y simetría.
@@ -5125,8 +5226,28 @@ class OptimizedTechnicalAnalyzer:
                 data_id=data_id
             )
             validation_result['entry_setup'] = entry_setup
+
+            # ✅ Filtro adicional MM Buy Model (reduce SL en falsas rupturas)
+            mm_result = {
+                'valid': True,
+                'score': 100.0,
+                'reason': 'MM filter desactivado o no aplica',
+                'spring_detected': False
+            }
+            if bool(getattr(config, 'ENABLE_MM_BUY_FILTER', True)):
+                if market_direction == 'BULLISH':
+                    mm_result = self.evaluate_mm_buy_setup(df_entry=df_entry, market_direction=market_direction, atr=atr)
+                elif market_direction == 'BEARISH':
+                    # Para ventas no aplicar filtro buy model estricto
+                    mm_result = {'valid': True, 'score': 75.0, 'reason': 'MM buy filter omitido para BEARISH', 'spring_detected': False}
+
+            validation_result['mm_setup'] = mm_result
             try:
                 criteria_list.append(entry_setup.get('text', '🎯 Entrada: N/A'))
+                criteria_list.append(
+                    f"🧩 MM Setup: {'✅' if mm_result.get('valid') else '❌'} "
+                    f"{mm_result.get('reason', 'N/A')}"
+                )
             except Exception:
                 pass
 
@@ -5150,6 +5271,12 @@ class OptimizedTechnicalAnalyzer:
             entry_required = bool(getattr(config, 'REQUIRE_ENTRY_SETUP', False)) or bool(getattr(config, 'REQUIRE_CANDLE_PATTERN', False))
             entry_setup_valid = bool(entry_setup.get('valid', True)) if isinstance(entry_setup, dict) else True
             if entry_required and not entry_setup_valid:
+                essential_criteria_met = False
+
+            # MM Buy Model como criterio esencial adicional (si está activo)
+            mm_required = bool(getattr(config, 'ENABLE_MM_BUY_FILTER', True)) and market_direction == 'BULLISH'
+            mm_valid = bool(mm_result.get('valid', True))
+            if mm_required and not mm_valid:
                 essential_criteria_met = False
 
             # Bonus por criterios opcionales (no bloquean pero mejoran la señal)
@@ -5180,6 +5307,8 @@ class OptimizedTechnicalAnalyzer:
             rejection_reasons = []
             if entry_required and not entry_setup_valid and isinstance(entry_setup, dict):
                 rejection_reasons.append(entry_setup.get('reason', 'Entrada no óptima'))
+            if mm_required and not mm_valid:
+                rejection_reasons.append(mm_result.get('reason', 'MM setup no válido'))
             if not pattern_valid:
                 rejection_reasons.append(pattern_fail_reason)
             if not confirmation_valid:
