@@ -608,6 +608,7 @@ class AdvancedTradingConfig:
         self.ENTRY_PULLBACK_REQUIRED = True
         self.ENTRY_CONFLUENCE_BYPASS = 85  # Aumentado a 85 (más selectivo)
         self.MIN_VOLATILITY_PERCENT = 0.5
+        self.MIN_SIGNAL_ROBUSTNESS = 76.0   # Score combinado IA+Técnico+Alineación
         self.DYNAMIC_THRESHOLDS_ENABLED = True
         self.THRESHOLD_WINDOW_DAYS = 90
         self.THRESHOLD_MIN = 70.0
@@ -628,7 +629,7 @@ class AdvancedTradingConfig:
         self.MIN_TECH_VALIDATION = 85.0
         self.MIN_NEURAL_VALIDATION = 88.0
         self.MIN_VOLUME_RATIO = 1.2  # Aumentado de 0.8 a 1.2 (+50%)
-        self.MIN_RISK_REWARD_RATIO = 1.5  # Aumentado de 1.0 a 1.5 (+50%)
+        self.MIN_RISK_REWARD_RATIO = 1.75  # Aumentado para priorizar setups más robustos
         self.MAX_RISK_PER_TRADE = 0.02
         self.NEURAL_WEIGHT = 0.5
         self.TECHNICAL_WEIGHT = 0.5
@@ -1796,11 +1797,40 @@ class UnifiedMarketAnalyzer:
         if not (buy_confluence or sell_confluence):
             return None
 
+        # === 🛡️ Filtro de robustez: evita señales débiles o en rango ===
+        robustness_score = (
+            float(neural_pred.get('neural_confidence', 0.0)) * 0.45 +
+            float(tech_score) * 0.30 +
+            float(align_score) * 0.25
+        )
+        min_robustness = float(getattr(self.config, 'MIN_SIGNAL_ROBUSTNESS', 76.0))
+        if robustness_score < min_robustness:
+            return None
+
         # === 📏 Niveles con pisos mínimos ===
         min_sl_percent = getattr(self.config, 'MIN_STOP_LOSS_PERCENT', 0.3) / 100
         min_tp_percent = getattr(self.config, 'TAKE_PROFIT_PERCENT', 1.0) / 100
-        sl_dist = max(atr * 1.5, current_price * min_sl_percent)
-        tp_dist = max(atr * 3.0, current_price * min_tp_percent)
+        atr_regime = float((atr / current_price) * 100) if current_price > 0 else 0.0
+
+        # ✅ Ajuste adaptativo por volatilidad y calidad de señal (menos SL por ruido)
+        if atr_regime >= 1.6:
+            sl_mult, tp_mult = 1.9, 3.8
+        elif atr_regime >= 1.0:
+            sl_mult, tp_mult = 1.7, 3.4
+        else:
+            sl_mult, tp_mult = 1.45, 2.9
+
+        if robustness_score >= 88:
+            sl_mult += 0.12
+            tp_mult += 0.30
+
+        sl_dist = max(atr * sl_mult, current_price * min_sl_percent)
+        tp_dist = max(atr * tp_mult, current_price * min_tp_percent)
+
+        rr_ratio = (tp_dist / sl_dist) if sl_dist > 0 else 0.0
+        min_rr_ratio = float(getattr(self.config, 'MIN_RISK_REWARD_RATIO', 1.75))
+        if rr_ratio < min_rr_ratio:
+            return None
 
         if buy_confluence:
             entry, sl, tp, direction = current_price, current_price - sl_dist, current_price + tp_dist, "BUY"
@@ -1816,11 +1846,18 @@ class UnifiedMarketAnalyzer:
             'neural_score': neural_pred['neural_confidence'],
             'technical_percentage': tech_score,
             'alignment_percentage': align_score,
+            'robustness_score': robustness_score,
+            'risk_reward_ratio': rr_ratio,
+            'atr_regime_percent': atr_regime,
+            'neural_label': neural_pred.get('neural_label', 'NEUTRAL'),
             'dataframe_entry': df.copy()
         }
 
         self.set_active_signal(signal_data)
-        logger.info(f"🧠🚀 SEÑAL CONFIRMADA: {symbol} | IA={neural_pred['neural_confidence']:.1f}% | Tec={tech_score:.1f}% | Ali={align_score:.1f}%")
+        logger.info(
+            f"🧠🚀 SEÑAL CONFIRMADA: {symbol} | IA={neural_pred['neural_confidence']:.1f}% "
+            f"| Tec={tech_score:.1f}% | Ali={align_score:.1f}% | Robustez={robustness_score:.1f}% | R/R={rr_ratio:.2f}"
+        )
         return signal_data
 
     def _fast_engine_lightweight(self, df: pd.DataFrame, symbol: str) -> Optional[Dict[str, Any]]:
@@ -1956,13 +1993,13 @@ class UnifiedMarketAnalyzer:
 
     def _get_neural_prediction(self, df: pd.DataFrame) -> Dict:
         if not self.is_neural_ready or self.model is None:
-            return {'neural_bias': 'NEUTRAL', 'neural_confidence': 0.0}
+            return {'neural_bias': 'NEUTRAL', 'neural_label': 'NEUTRAL', 'neural_confidence': 0.0}
 
         try:
             analyzer = OptimizedTechnicalAnalyzer(self.config)
             features, _ = self._extract_optimized_features(df, analyzer)
             if not features:
-                return {'neural_bias': 'NEUTRAL', 'neural_confidence': 0.0}
+                return {'neural_bias': 'NEUTRAL', 'neural_label': 'NEUTRAL', 'neural_confidence': 0.0}
 
             # Usar múltiples predicciones de 60 velas (60 min en 1m) para reducir ruido
             X = np.array(features[-60:]) if len(features) >= 60 else np.array(features[-max(1, len(features)):])
@@ -2001,8 +2038,16 @@ class UnifiedMarketAnalyzer:
             else:
                 signal_type = SignalType.NEUTRAL
 
+            if signal_type in (SignalType.CONFIRMED_BUY, SignalType.STRONG_BUY, SignalType.MODERATE_BUY, SignalType.WEAK_BUY):
+                normalized_bias = "BULLISH"
+            elif signal_type in (SignalType.CONFIRMED_SELL, SignalType.STRONG_SELL, SignalType.MODERATE_SELL, SignalType.WEAK_SELL):
+                normalized_bias = "BEARISH"
+            else:
+                normalized_bias = "NEUTRAL"
+
             return {
-                'neural_bias': signal_type.name,
+                'neural_bias': normalized_bias,
+                'neural_label': signal_type.name,
                 'neural_confidence': max_prob * 100,
                 'buy_probability': buy_prob * 100,
                 'sell_probability': sell_prob * 100,
@@ -2011,7 +2056,7 @@ class UnifiedMarketAnalyzer:
 
         except Exception as e:
             logger.error(f"Error en _get_neural_prediction: {e}")
-            return {'neural_bias': 'NEUTRAL', 'neural_confidence': 0.0}
+            return {'neural_bias': 'NEUTRAL', 'neural_label': 'NEUTRAL', 'neural_confidence': 0.0}
 
     def _get_technical_bias(self, latest: pd.Series, prev: pd.Series) -> Tuple[str, float]:
         try:
@@ -5605,22 +5650,51 @@ class SimilarityEngine:
 
     def _save_successful_trade_internal(self, signal_hash: str, tracking: dict, report: dict):
         try:
+            signal_data = tracking.get('signal_data', {})
+            entry_price = float(tracking.get('entry_price') or signal_data.get('entry_price') or 0.0)
+            exit_price = float(report.get('exit_price', 0.0) or 0.0)
+            final_profit_percent = float(report.get('final_profit_percent', 0.0) or 0.0)
+            duration_minutes = float(report.get('duration_minutes', 0.0) or 0.0)
+
+            if entry_price <= 0 or exit_price <= 0:
+                logger.warning(f"[SKIP] Trade no guardado por precios inválidos: entry={entry_price}, exit={exit_price}")
+                return
+
+            # Evitar ruido de muestras no exitosas para entrenamiento "successful only"
+            min_success_profit = max(0.5, float(getattr(self.config, 'MIN_PROFIT_THRESHOLD', 1.0)) * 0.5)
+            if final_profit_percent < min_success_profit:
+                logger.info(
+                    f"[SKIP] Trade omitido para entrenamiento exitoso: profit={final_profit_percent:.2f}% < {min_success_profit:.2f}%"
+                )
+                return
+
             path = os.path.join(self.config.TRAINING_SUCCESS_DIR, f"{signal_hash}.json")
             data = {
                 'signal_hash': signal_hash,
-                'symbol': tracking['signal_data'].get('symbol', 'N/A'),
-                'entry_price': tracking['entry_price'],
-                'exit_price': report['exit_price'],
-                'final_profit_percent': report['final_profit_percent'],
-                'duration_minutes': report.get('duration_minutes', 0),
-                'is_success': report['final_profit_percent'] >= self.config.MIN_PROFIT_THRESHOLD,
-                'neural_score': tracking['signal_data'].get('neural_score', 0),
-                'technical_percentage': tracking['signal_data'].get('technical_percentage', 0),
+                'symbol': signal_data.get('symbol', 'N/A'),
+                'signal_type': signal_data.get('signal_type', 'N/A'),
+                'entry_price': entry_price,
+                'exit_price': exit_price,
+                'final_profit_percent': final_profit_percent,
+                'duration_minutes': duration_minutes,
+                'is_success': True,
+                'reason': report.get('reason', 'N/A'),
+                'reason_normalized': report.get('reason_normalized', 'N/A'),
+                'is_buy': bool(report.get('is_buy', signal_data.get('is_buy', True))),
+                'max_profit_reached': float(report.get('max_profit_reached', final_profit_percent) or final_profit_percent),
+                'neural_score': float(signal_data.get('neural_score', 0.0) or 0.0),
+                'technical_percentage': float(signal_data.get('technical_percentage', 0.0) or 0.0),
+                'alignment_percentage': float(signal_data.get('alignment_percentage', 0.0) or 0.0),
+                'robustness_score': float(signal_data.get('robustness_score', 0.0) or 0.0),
+                'risk_reward_ratio': float(signal_data.get('risk_reward_ratio', 0.0) or 0.0),
+                'atr_regime_percent': float(signal_data.get('atr_regime_percent', 0.0) or 0.0),
+                'entry_price_confirmada': float(tracking.get('entry_price_confirmada') or 0.0),
+                'reference_price_destacada': float(tracking.get('reference_price_destacada') or 0.0),
                 'timestamp': datetime.now().isoformat()
             }
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2)
-            logger.info(f"[OK] Trade guardado: {path}")
+            logger.info(f"[OK] Trade guardado para entrenamiento exitoso: {path}")
             self.refresh()
         except Exception as e:
             logger.error(f"[ERROR] Error guardando trade {signal_hash}: {e}")
@@ -7343,6 +7417,9 @@ class OptimizedTelegramClient:
         self.sent_signals = set()
         self.sent_promotions = set()  # Control de promociones enviadas por par
         self.sent_milestones = {}  # {symbol: set(milestones_enviados)}
+        self.sent_closures = set()  # {(symbol, reason_norm)}
+        self.sent_highlight_expired = set()  # {symbol}
+        self.telegram_dedupe_lock = threading.Lock()
 
         # Cola de mensajes para envio no bloqueante
         self.message_queue = queue.Queue(maxsize=100)
@@ -7907,6 +7984,11 @@ class OptimizedTelegramClient:
             logger.debug(f"⏭️ Promoción ya enviada para {symbol}, omitiendo duplicado")
             return True
 
+        # Dedupe fuerte por evento
+        if not self._dedupe_once(("PROMOTION", symbol)):
+            logger.debug(f"⏭️ Evento PROMOTION duplicado para {symbol}")
+            return True
+
         try:
             escaped_symbol = self._escape_html(symbol)
 
@@ -7946,24 +8028,18 @@ class OptimizedTelegramClient:
 
             message = self._truncate_message(message)
 
-            # Enviar mensaje con gráfico si existe
+            # SOLO UN ENVÍO: foto con caption o texto (nunca ambos)
+            sent_ok = False
             if chart_path and os.path.exists(chart_path):
-                # Preparar caption para la foto
-                caption = f"📊 {escaped_symbol} - CONFIRMADA"
-                photo_sent = self.send_photo(chart_path, caption)
-                if photo_sent:
-                    # Enviar también el mensaje detallado
-                    self._send_message_direct(message)
-                    self.sent_promotions.add(symbol)
-                    logger.info(f"✅ {symbol} promoción CONFIRMADA enviada con gráfico")
-                    return True
+                sent_ok = self.send_photo(chart_path, message, parse_mode='HTML')
 
-            # Fallback: solo texto si no hay gráfico
-            text_sent = self._send_message_direct(message)
-            if text_sent:
+            if not sent_ok:
+                sent_ok = self._send_message_direct(message)
+
+            if sent_ok:
                 self.sent_promotions.add(symbol)
-                logger.info(f"✅ {symbol} promoción CONFIRMADA enviada (sin gráfico)")
-            return text_sent
+                logger.info(f"✅ {symbol} promoción CONFIRMADA enviada (1 solo mensaje)")
+            return sent_ok
 
         except Exception as e:
             logger.error(f"❌ Error enviando promoción para {symbol}: {e}")
@@ -7975,6 +8051,11 @@ class OptimizedTelegramClient:
 
         # Limpiar promoción enviada para permitir futuras promociones del mismo par
         self.sent_promotions.discard(symbol)
+
+        reason_key = self._normalize_reason_key(reason)
+        if not self._dedupe_once(("CLOSURE", symbol, reason_key)):
+            logger.debug(f"⏭️ Cierre duplicado omitido para {symbol} ({reason_key})")
+            return True
 
         try:
             if reason == 'target_reached':
@@ -8038,19 +8119,41 @@ class OptimizedTelegramClient:
                 )
 
             caption = self._truncate_message(caption)
-            text_sent = self.send_message(caption)
 
-            # 🔥 MEJORADO: Intentar enviar gráfico si existe o crear uno nuevo
-            if text_sent:
-                if chart_path and os.path.exists(chart_path):
-                    self.send_photo(chart_path, caption)
-                else:
-                    # Si no existe chart, intentar generarlo para este cierre
-                    logger.info(f"📊 Enviando gráfico final para {symbol} al cerrar")
-            return text_sent
+            # SOLO UN ENVÍO: foto con caption o texto (nunca ambos)
+            sent_ok = False
+            if chart_path and os.path.exists(chart_path):
+                sent_ok = self.send_photo(chart_path, caption, parse_mode='HTML')
+            if not sent_ok:
+                sent_ok = self.send_message(caption, parse_mode='HTML')
+            return sent_ok
         except Exception as e:
             logger.error(f"Error enviando cierre: {e}")
             return False
+
+    def _normalize_reason_key(self, reason: str) -> str:
+        """Normaliza razones de cierre para evitar duplicados con alias."""
+        r = str(reason or '').strip().upper()
+        reason_map = {
+            "TARGET_REACHED": "PROFIT_TARGET",
+            "TAKE_PROFIT": "PROFIT_TARGET",
+            "TP_REACHED": "PROFIT_TARGET",
+            "STOP_LOSS_HIT": "STOP_LOSS",
+            "SL_HIT": "STOP_LOSS",
+            "TREND_REVERSAL_DETECTED": "TREND_REVERSAL",
+            "TREND_CHANGE_PARTIAL": "PARTIAL_TARGET",
+        }
+        return reason_map.get(r, r)
+
+    def _dedupe_once(self, key: tuple) -> bool:
+        """Retorna True si el evento es nuevo; False si ya fue enviado antes."""
+        with self.telegram_dedupe_lock:
+            if not hasattr(self, '_sent_event_keys'):
+                self._sent_event_keys = set()
+            if key in self._sent_event_keys:
+                return False
+            self._sent_event_keys.add(key)
+            return True
 
 
     def test_connection(self) -> bool:
@@ -8078,6 +8181,16 @@ class OptimizedTelegramClient:
             m3 = getattr(self.config, 'MILESTONE_3', 1.5)
             sl_pct = getattr(self.config, 'DEFAULT_STOP_LOSS_PERCENT', 0.01) * 100
 
+            # Evitar duplicar la notificación final: objetivo lo informa el cierre
+            if milestone >= m3:
+                logger.debug(f"⏭️ Milestone objetivo omitido para {symbol}; lo informa el cierre")
+                return True
+
+            milestone_key = round(float(milestone), 4)
+            if not self._dedupe_once(("MILESTONE", symbol, milestone_key)):
+                logger.debug(f"⏭️ Milestone duplicado omitido para {symbol} ({milestone_key})")
+                return True
+
             # Determinar qué milestone es y cuál es el próximo
             if milestone >= m3:
                 emoji = "🎯"
@@ -8103,11 +8216,14 @@ class OptimizedTelegramClient:
                 f"⏱️ {datetime.now().strftime('%H:%M:%S')}"
             )
             text = self._truncate_message(text)
-            text_sent = self.send_message(text, parse_mode='HTML')
-            if text_sent and chart_path and os.path.exists(chart_path):
-                caption = f"📊 {symbol} — +{milestone:.1f}%\n💰 Profit: {profit:+.2f}% | TP: {m3:.1f}% | SL: -{sl_pct:.1f}%"
-                self.send_photo(photo_path=chart_path, caption=caption, parse_mode='HTML')
-            return text_sent
+
+            # SOLO UN ENVÍO: foto con caption o texto
+            sent_ok = False
+            if chart_path and os.path.exists(chart_path):
+                sent_ok = self.send_photo(photo_path=chart_path, caption=text, parse_mode='HTML')
+            if not sent_ok:
+                sent_ok = self.send_message(text, parse_mode='HTML')
+            return sent_ok
         except Exception as e:
             logger.error(f"Error enviando Avance {milestone}%: {e}")
             return False
@@ -8116,6 +8232,11 @@ class OptimizedTelegramClient:
         """Enviar notificación cuando una señal DESTACADA expira sin confirmarse"""
         if not self.config.telegram_enabled:
             return False
+
+        if not self._dedupe_once(("HIGHLIGHT_EXPIRED", symbol)):
+            logger.debug(f"⏭️ HIGHLIGHT_EXPIRED duplicado omitido para {symbol}")
+            return True
+
         try:
             escaped_symbol = self._escape_html(symbol)
             text = (
@@ -12290,6 +12411,7 @@ class SignalTracker:
             report = {
                 'symbol': symbol,
                 'reason': reason,
+                'reason_normalized': normalized_reason,
                 'profit_percent': profit_percent,
                 'final_profit_percent': profit_percent,
                 'duration_minutes': (datetime.now() - tracking['start_time']).total_seconds() / 60,
@@ -12298,13 +12420,22 @@ class SignalTracker:
 
             try:
                 if self._similarity_engine_ref:
-                    save_reasons = {"PROFIT_TARGET"}
-                    reason_ok = (normalized_reason in save_reasons) or (str(reason).lower() in {"target_reached", "take_profit", "tp_reached"}) or (profit_percent >= success_threshold)
+                    save_reasons = {"PROFIT_TARGET", "PARTIAL_TARGET"}
+                    hard_sl_reasons = {"STOP_LOSS", "STOP_LOSS_HIT", "SL_HIT"}
+                    positive_outcome = (profit_percent >= max(0.8, success_threshold * 0.6))
+                    reason_ok = (normalized_reason in save_reasons) or positive_outcome
+                    if normalized_reason in hard_sl_reasons and profit_percent < 0:
+                        reason_ok = False
+
                     if reason_ok:
                         self._similarity_engine_ref._save_successful_trade_internal(signal_hash, tracking, {
                             'final_profit_percent': profit_percent,
                             'duration_minutes': report['duration_minutes'],
-                            'exit_price': current_price
+                            'exit_price': current_price,
+                            'reason': reason,
+                            'reason_normalized': normalized_reason,
+                            'max_profit_reached': tracking.get('max_profit', profit_percent),
+                            'is_buy': is_buy
                         })
             except Exception as e:
                 logger.error(f"[ERROR] Error guardando trade exitoso para entrenamiento: {e}")
