@@ -632,6 +632,7 @@ class AdvancedTradingConfig:
         self.MIN_RISK_REWARD_RATIO = 1.75  # Aumentado para priorizar setups más robustos
         self.ENABLE_MM_BUY_FILTER = True  # Filtro Market Maker Buy Model
         self.MM_MIN_SCORE = 65.0
+        self.MM_SELL_MIN_SCORE = 65.0
         self.MM_PULLBACK_MIN = 0.25
         self.MM_PULLBACK_MAX = 0.72
         self.MAX_RISK_PER_TRADE = 0.02
@@ -4215,6 +4216,102 @@ class OptimizedTechnicalAnalyzer:
             logger.debug(f"Error en evaluate_mm_buy_setup: {e}")
             return {'valid': False, 'score': 0.0, 'reason': f'Error MM: {e}', 'spring_detected': False}
 
+
+    def evaluate_mm_sell_setup(self, df_entry: pd.DataFrame, market_direction: str, atr: Optional[float] = None) -> dict:
+        """
+        Market Maker Sell Model (espejo del buy model):
+        - Impulso bajista inicial
+        - Retroceso alcista controlado
+        - Upthrust/liquidity sweep en máximos recientes
+        - Rechazo rápido por debajo de EMA21 con volumen
+        """
+        try:
+            if df_entry is None or len(df_entry) < 40:
+                return {'valid': False, 'score': 0.0, 'reason': 'Datos insuficientes MM SELL', 'upthrust_detected': False}
+
+            d = df_entry.tail(40).copy()
+            c = pd.to_numeric(d['close'], errors='coerce')
+            h = pd.to_numeric(d['high'], errors='coerce')
+            l = pd.to_numeric(d['low'], errors='coerce')
+            o = pd.to_numeric(d['open'], errors='coerce')
+            v = pd.to_numeric(d['volume'], errors='coerce').fillna(0)
+
+            if hasattr(atr, 'iloc'):
+                atr_val = float(atr.iloc[-1]) if len(atr) else 0.0
+            elif atr is not None:
+                atr_val = float(atr)
+            else:
+                atr_series = self.calculate_atr(d, 14)
+                atr_val = float(atr_series.iloc[-1]) if len(atr_series) else 0.0
+
+            if atr_val <= 1e-12:
+                return {'valid': False, 'score': 0.0, 'reason': 'ATR inválido MM SELL', 'upthrust_detected': False}
+
+            ema21 = self.calculate_ema(c, 21, "mm_sell")
+            ema_val = float(ema21.iloc[-1]) if len(ema21) else float(c.iloc[-1])
+
+            # Impulso bajista previo
+            prior = d.iloc[-21:-1]
+            if len(prior) < 8:
+                return {'valid': False, 'score': 0.0, 'reason': 'Impulso insuficiente MM SELL', 'upthrust_detected': False}
+            impulse_high = float(prior['high'].max())
+            impulse_low = float(prior['low'].min())
+            impulse_move = max(1e-12, impulse_high - impulse_low)
+
+            # Retroceso alcista desde mínimo del impulso hasta máximo reciente
+            pullback_high = float(d.iloc[-8:]['high'].max())
+            pullback_ratio = (pullback_high - impulse_low) / impulse_move
+
+            pb_min = float(getattr(self.config, 'MM_PULLBACK_MIN', 0.25))
+            pb_max = float(getattr(self.config, 'MM_PULLBACK_MAX', 0.72))
+            pullback_ok = pb_min <= pullback_ratio <= pb_max
+
+            # Upthrust: barrer máximos recientes y cerrar por debajo
+            recent_res = float(d.iloc[-20:-2]['high'].max()) if len(d) >= 22 else float(d['high'].max())
+            last = d.iloc[-1]
+            upthrust_detected = (float(last['high']) > recent_res) and (float(last['close']) < recent_res)
+
+            # Rechazo bajo EMA y cuerpo bajista
+            reject_ema = float(last['close']) <= ema_val and float(last['close']) < float(last['open'])
+
+            vol_mean = float(v.tail(20).mean()) if len(v) >= 20 else float(v.mean())
+            vol_ok = vol_mean > 0 and float(last['volume']) >= vol_mean * 1.15
+
+            macro_ok = (market_direction or 'NEUTRAL').upper() in ('BEARISH', 'NEUTRAL')
+
+            score = 0.0
+            if pullback_ok:
+                score += 25
+            if upthrust_detected:
+                score += 30
+            if reject_ema:
+                score += 25
+            if vol_ok:
+                score += 15
+            if macro_ok:
+                score += 5
+
+            mm_min = float(getattr(self.config, 'MM_SELL_MIN_SCORE', getattr(self.config, 'MM_MIN_SCORE', 65.0)))
+            valid = score >= mm_min and (upthrust_detected or reject_ema)
+
+            reason = (
+                f"MM SELL score={score:.1f} | pullback={pullback_ratio:.2f} | "
+                f"upthrust={'SI' if upthrust_detected else 'NO'} | vol={'OK' if vol_ok else 'BAJO'}"
+            )
+
+            return {
+                'valid': valid,
+                'score': float(score),
+                'reason': reason,
+                'upthrust_detected': upthrust_detected,
+                'pullback_ratio': float(pullback_ratio),
+                'reject_ema': reject_ema,
+                'volume_ok': vol_ok
+            }
+        except Exception as e:
+            logger.debug(f"Error en evaluate_mm_sell_setup: {e}")
+            return {'valid': False, 'score': 0.0, 'reason': f'Error MM SELL: {e}', 'upthrust_detected': False}
+
     def detect_w_m_pattern(self, df: pd.DataFrame) -> dict:
         """
         Detecta patrones W (doble suelo) y M (doble techo) con volumen y simetría.
@@ -5238,8 +5335,7 @@ class OptimizedTechnicalAnalyzer:
                 if market_direction == 'BULLISH':
                     mm_result = self.evaluate_mm_buy_setup(df_entry=df_entry, market_direction=market_direction, atr=atr)
                 elif market_direction == 'BEARISH':
-                    # Para ventas no aplicar filtro buy model estricto
-                    mm_result = {'valid': True, 'score': 75.0, 'reason': 'MM buy filter omitido para BEARISH', 'spring_detected': False}
+                    mm_result = self.evaluate_mm_sell_setup(df_entry=df_entry, market_direction=market_direction, atr=atr)
 
             validation_result['mm_setup'] = mm_result
             try:
@@ -5274,7 +5370,7 @@ class OptimizedTechnicalAnalyzer:
                 essential_criteria_met = False
 
             # MM Buy Model como criterio esencial adicional (si está activo)
-            mm_required = bool(getattr(config, 'ENABLE_MM_BUY_FILTER', True)) and market_direction == 'BULLISH'
+            mm_required = bool(getattr(config, 'ENABLE_MM_BUY_FILTER', True)) and market_direction in ('BULLISH', 'BEARISH')
             mm_valid = bool(mm_result.get('valid', True))
             if mm_required and not mm_valid:
                 essential_criteria_met = False
