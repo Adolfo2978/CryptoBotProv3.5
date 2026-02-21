@@ -8759,6 +8759,9 @@ class RobustWebSocketManager:
         self._callback_queue = queue.Queue(maxsize=2000)
         self._callback_thread = None
         self._dropped_updates = 0
+
+        # Compatibilidad websocket-client (evitar warning repetido por ping_payload)
+        self._ping_payload_unsupported = False
         
         # Estadisticas de conexion
         self.connection_stats = {
@@ -8984,15 +8987,18 @@ class RobustWebSocketManager:
             run_forever_kwargs = {
                 'ping_interval': self.intervalo_ping,
                 'ping_timeout': self.ping_timeout,
-                'ping_payload': 'ping'
             }
+            if not self._ping_payload_unsupported:
+                run_forever_kwargs['ping_payload'] = 'ping'
 
             try:
                 self.ws.run_forever(**run_forever_kwargs)
             except TypeError as te:
                 # Compatibilidad con versiones websocket-client antiguas sin soporte ping_payload
                 if 'ping_payload' in str(te):
-                    logger.warning("websocket-client sin soporte 'ping_payload'; reintentando sin ese parámetro")
+                    if not self._ping_payload_unsupported:
+                        logger.info("websocket-client sin soporte 'ping_payload'; usando fallback sin ese parámetro")
+                    self._ping_payload_unsupported = True
                     run_forever_kwargs.pop('ping_payload', None)
                     self.ws.run_forever(**run_forever_kwargs)
                 else:
@@ -11095,7 +11101,13 @@ class OptimizedTradingBot:
                 logger.info(f"  {key}: {value}")
         
         if 'warnings' in diag:
-            logger.warning(f"\nADVERTENCIAS: {diag['warnings']}")
+            # Evitar spam de warning durante arranque cuando WS aún está conectando
+            warnings_list = list(diag.get('warnings', []))
+            only_ws_connecting = (len(warnings_list) == 1 and warnings_list[0] == 'WebSocket conectando...')
+            if only_ws_connecting:
+                logger.info(f"\nADVERTENCIAS (informativas): {warnings_list}")
+            else:
+                logger.warning(f"\nADVERTENCIAS: {warnings_list}")
         
         logger.info("=" * 50)
         return diag
