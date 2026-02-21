@@ -8981,11 +8981,22 @@ class RobustWebSocketManager:
 
             # ✅ MEJORA ARGENTINA: WebSocket con ping/pong optimizado para alta latencia
             # IMPORTANTE: ping_interval (90s) > ping_timeout (60s) - requisito websocket-client
-            self.ws.run_forever(
-                ping_interval=self.intervalo_ping,  # 90s entre pings
-                ping_timeout=self.ping_timeout,     # 60s espera para pong
-                ping_payload="ping"
-            )
+            run_forever_kwargs = {
+                'ping_interval': self.intervalo_ping,
+                'ping_timeout': self.ping_timeout,
+                'ping_payload': 'ping'
+            }
+
+            try:
+                self.ws.run_forever(**run_forever_kwargs)
+            except TypeError as te:
+                # Compatibilidad con versiones websocket-client antiguas sin soporte ping_payload
+                if 'ping_payload' in str(te):
+                    logger.warning("websocket-client sin soporte 'ping_payload'; reintentando sin ese parámetro")
+                    run_forever_kwargs.pop('ping_payload', None)
+                    self.ws.run_forever(**run_forever_kwargs)
+                else:
+                    raise
 
         except Exception as e:
             error_str = str(e)
