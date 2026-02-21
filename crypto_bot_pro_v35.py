@@ -459,15 +459,32 @@ except ImportError as e:
         return decorator
 
 # Importaciones para QWebEngineView (TradingView Charts)
+WEBENGINE_IMPORT_ERROR = None
 try:
     from PyQt5.QtWebEngineWidgets import QWebEngineView
     from PyQt5.QtWebChannel import QWebChannel
     from PyQt5.QtCore import QUrl
     WEBENGINE_AVAILABLE = True
     print("✅ PyQtWebEngine disponible - Gráficos TradingView habilitados")
-except ImportError as e:
+except Exception as e:
     WEBENGINE_AVAILABLE = False
-    print(f"⚠️ PyQtWebEngine no disponible: {e} - Usando matplotlib")
+    WEBENGINE_IMPORT_ERROR = str(e)
+
+    # Fallback seguro: evitar NameError cuando no existe QtWebEngine
+    class QWebEngineView:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class QWebChannel:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class QUrl:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    # Mensaje informativo (no error): el sistema continúa con matplotlib
+    print(f"ℹ️ PyQtWebEngine no disponible ({WEBENGINE_IMPORT_ERROR}) - fallback activo con matplotlib")
 # Importaciones para gráficos
 try:
     import matplotlib
