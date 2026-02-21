@@ -10693,18 +10693,9 @@ class OptimizedTradingBot:
             # ✅ Limpieza total de cachés
             self.clear_all_caches()
 
-            # ✅ Remover de lista activa y limpiar GUI
-            try:
-                self.active_signals = [
-                    s for s in self.active_signals
-                    if not (
-                        (s.get('symbol') == symbol) or
-                        (sig_hash and s.get('signal_hash') == sig_hash)
-                    )
-                ]
-            except Exception:
-                pass
-            self._safe_gui_queue_put(('remove_signal_from_table', symbol))
+            # ✅ Remover de lista activa/cache y limpiar GUI
+            self._purge_closed_signal_cache(symbol=symbol, sig_hash=sig_hash)
+            self._safe_gui_queue_put(('remove_signal_from_table', {'symbol': symbol, 'signal_hash': sig_hash}))
             try:
                 if not self.active_signals:
                     self._safe_gui_queue_put(('clear_signals_table', None))
@@ -10749,17 +10740,8 @@ class OptimizedTradingBot:
         sig_hash = report.get('signal_hash')
         logger.info(f"[CALLBACK] _on_signal_closed_callback ejecutado para {symbol} | Razon: {reason} | Profit: {profit:.2f}%")
 
-        try:
-            self.active_signals = [
-                s for s in self.active_signals
-                if not (
-                    (s.get('symbol') == symbol) or
-                    (sig_hash and s.get('signal_hash') == sig_hash)
-                )
-            ]
-        except Exception:
-            pass
-        self._safe_gui_queue_put(('remove_signal_from_table', symbol))
+        self._purge_closed_signal_cache(symbol=symbol, sig_hash=sig_hash)
+        self._safe_gui_queue_put(('remove_signal_from_table', {'symbol': symbol, 'signal_hash': sig_hash}))
         try:
             if not self.active_signals:
                 self._safe_gui_queue_put(('clear_signals_table', None))
@@ -10855,6 +10837,32 @@ class OptimizedTradingBot:
             self._safe_gui_queue_put(('reset_main_panel', None))
             self._safe_gui_queue_put(('log_message', f"MODO EXCLUSIVO LIBERADO ({old_symbol}): Reanudando escaneo"))
             logger.info(f"Modo exclusivo liberado y GUI limpiada para {old_symbol}")
+
+    def _purge_closed_signal_cache(self, symbol: str = None, sig_hash: str = None):
+        """Elimina señales cerradas del cache interno para evitar que reaparezcan en GUI."""
+        try:
+            symbol_norm = str(symbol or '').strip().upper()
+            hash_norm = str(sig_hash or '').strip()
+
+            new_active = []
+            removed = 0
+            for s in list(getattr(self, 'active_signals', []) or []):
+                s_symbol = str(s.get('symbol', '')).strip().upper()
+                s_hash = str(s.get('signal_hash', '')).strip()
+
+                by_symbol = bool(symbol_norm and s_symbol == symbol_norm)
+                by_hash = bool(hash_norm and s_hash and s_hash == hash_norm)
+
+                if by_symbol or by_hash:
+                    removed += 1
+                    continue
+                new_active.append(s)
+
+            self.active_signals = new_active
+            if removed:
+                logger.info(f"🧹 Cache de señales purgado: {removed} removidas ({symbol_norm or 'N/A'} | {hash_norm[:8] if hash_norm else 'no-hash'})")
+        except Exception as e:
+            logger.error(f"Error purgando cache de señales cerradas: {e}")
 
     def clear_all_caches(self):
         """
@@ -15821,12 +15829,14 @@ analizando datos en tiempo real cada 2 segundos.</p>
                 elif msg_type == 'remove_signal_from_table':
                     def _remove_signal():
                         try:
+                            target_symbol = data.get('symbol') if isinstance(data, dict) else data
                             rows = self.signals_tree.rowCount()
                             for row in reversed(range(rows)):
                                 item = self.signals_tree.item(row, 0)
-                                if item and item.text() == data:
+                                symbol_match = bool(item and item.text() == target_symbol)
+                                if symbol_match:
                                     self.signals_tree.removeRow(row)
-                            logger.info(f"🗑️ Señal de {data} eliminada de la interfaz.")
+                            logger.info(f"🗑️ Señal de {target_symbol} eliminada de la interfaz.")
                         except Exception as e:
                             logger.error(f"[ERROR] Error eliminando señal de GUI: {e}")
                     QtCore.QTimer.singleShot(0, _remove_signal)
