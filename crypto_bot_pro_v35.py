@@ -652,6 +652,10 @@ class AdvancedTradingConfig:
         self.MM_SELL_MIN_SCORE = 65.0
         self.MM_PULLBACK_MIN = 0.25
         self.MM_PULLBACK_MAX = 0.72
+        self.SIMILARITY_FILTER_ENABLED = True
+        self.SIMILARITY_THRESHOLD = 0.72
+        self.MIN_SIMILAR_SAMPLES = 3
+        self.MIN_CONTEXT_SUCCESS_RATE = 0.58
         self.MAX_RISK_PER_TRADE = 0.02
         self.NEURAL_WEIGHT = 0.5
         self.TECHNICAL_WEIGHT = 0.5
