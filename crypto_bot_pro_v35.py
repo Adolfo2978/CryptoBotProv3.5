@@ -13168,6 +13168,10 @@ class OptimizedCryptoBotGUI(QtWidgets.QMainWindow):
         config_action.triggered.connect(self._show_config_info)
         ayuda_menu.addAction(config_action)
 
+        stats_action = QtWidgets.QAction("Estadísticas del Trader", self)
+        stats_action.triggered.connect(self._show_trader_statistics_dialog)
+        ayuda_menu.addAction(stats_action)
+
     def _show_about_dialog(self):
         """Mostrar diálogo Acerca del Sistema"""
         about_text = """
@@ -13394,6 +13398,126 @@ analizando datos en tiempo real cada 2 segundos.</p>
 
         text_browser = QtWidgets.QTextBrowser()
         text_browser.setHtml(config_text)
+        text_browser.setStyleSheet("""
+            QTextBrowser {
+                background-color: #1a1a2e;
+                color: white;
+                border: 1px solid #00d4aa;
+                border-radius: 8px;
+                padding: 15px;
+            }
+        """)
+        layout.addWidget(text_browser)
+
+        close_btn = QtWidgets.QPushButton("Cerrar")
+        close_btn.setStyleSheet("background-color: #00d4aa; color: #0f0f23; padding: 10px; font-weight: bold;")
+        close_btn.clicked.connect(dialog.close)
+        layout.addWidget(close_btn)
+
+        dialog.exec_()
+
+    def _collect_trader_statistics(self) -> dict:
+        """Construye estadísticas de rendimiento trader para mostrar en GUI."""
+        stats = {
+            'total_signals': 0,
+            'closed_signals': 0,
+            'successful_signals': 0,
+            'loss_signals': 0,
+            'win_rate': 0.0,
+            'avg_profit_loss': 0.0,
+            'active_signals': 0,
+            'promotion_count': 0,
+            'closure_reasons': {}
+        }
+
+        try:
+            tracker = getattr(self.bot, 'signal_tracker', None)
+            if not tracker:
+                return stats
+
+            metrics = tracker.get_performance_metrics() or {}
+            closure_reasons = dict(metrics.get('closure_reasons', {}) or {})
+
+            total_signals = int(metrics.get('total_signals', 0) or 0)
+            successful_signals = int(metrics.get('successful_signals', 0) or 0)
+            closed_signals = sum(
+                int(count or 0)
+                for reason, count in closure_reasons.items()
+                if str(reason).upper() != 'CANCELLED'
+            )
+            loss_signals = max(closed_signals - successful_signals, 0)
+
+            stats.update({
+                'total_signals': total_signals,
+                'closed_signals': closed_signals,
+                'successful_signals': successful_signals,
+                'loss_signals': loss_signals,
+                'win_rate': (successful_signals / closed_signals * 100.0) if closed_signals > 0 else 0.0,
+                'avg_profit_loss': float(metrics.get('avg_profit_loss', 0.0) or 0.0),
+                'active_signals': len(tracker.get_tracked_signals()),
+                'promotion_count': int(metrics.get('promotion_count', 0) or 0),
+                'closure_reasons': closure_reasons
+            })
+        except Exception as e:
+            logger.error(f"[ERROR] No se pudieron calcular estadísticas del trader: {e}")
+
+        return stats
+
+    def _show_trader_statistics_dialog(self):
+        """Mostrar panel de estadísticas de éxitos y pérdidas del trader."""
+        stats = self._collect_trader_statistics()
+
+        closure_rows = "".join([
+            (
+                "<tr>"
+                f"<td style='padding: 6px; border: 1px solid #00d4aa;'>{str(reason).replace('_', ' ').title()}</td>"
+                f"<td style='padding: 6px; border: 1px solid #00d4aa; text-align: center;'>{count}</td>"
+                "</tr>"
+            )
+            for reason, count in sorted(stats['closure_reasons'].items(), key=lambda item: item[1], reverse=True)
+        ])
+        if not closure_rows:
+            closure_rows = (
+                "<tr><td style='padding: 6px; border: 1px solid #00d4aa;' colspan='2'>"
+                "Sin cierres registrados todavía."
+                "</td></tr>"
+            )
+
+        stats_text = f"""
+<h2 style='color: #00d4aa;'>Estadísticas del Trader</h2>
+<p style='color: #b0b0b0;'>Resumen en tiempo real de señales exitosas y pérdidas.</p>
+
+<h3 style='color: #52b788;'>Rendimiento General</h3>
+<table style='width: 100%; border-collapse: collapse;'>
+<tr><td style='padding: 8px; border: 1px solid #00d4aa;'><b>Total señales creadas</b></td><td style='padding: 8px; border: 1px solid #00d4aa;'>{stats['total_signals']}</td></tr>
+<tr><td style='padding: 8px; border: 1px solid #00d4aa;'><b>Señales cerradas</b></td><td style='padding: 8px; border: 1px solid #00d4aa;'>{stats['closed_signals']}</td></tr>
+<tr><td style='padding: 8px; border: 1px solid #00d4aa; color: #52b788;'><b>Trades exitosos ✅</b></td><td style='padding: 8px; border: 1px solid #00d4aa; color: #52b788;'><b>{stats['successful_signals']}</b></td></tr>
+<tr><td style='padding: 8px; border: 1px solid #00d4aa; color: #ff6b6b;'><b>Trades con pérdida ❌</b></td><td style='padding: 8px; border: 1px solid #00d4aa; color: #ff6b6b;'><b>{stats['loss_signals']}</b></td></tr>
+<tr><td style='padding: 8px; border: 1px solid #00d4aa;'><b>Win Rate</b></td><td style='padding: 8px; border: 1px solid #00d4aa;'><b>{stats['win_rate']:.2f}%</b></td></tr>
+<tr><td style='padding: 8px; border: 1px solid #00d4aa;'><b>Profit Promedio</b></td><td style='padding: 8px; border: 1px solid #00d4aa;'>{stats['avg_profit_loss']:+.2f}%</td></tr>
+<tr><td style='padding: 8px; border: 1px solid #00d4aa;'><b>Promociones a CONFIRMADA</b></td><td style='padding: 8px; border: 1px solid #00d4aa;'>{stats['promotion_count']}</td></tr>
+<tr><td style='padding: 8px; border: 1px solid #00d4aa;'><b>Señales activas ahora</b></td><td style='padding: 8px; border: 1px solid #00d4aa;'>{stats['active_signals']}</td></tr>
+</table>
+
+<h3 style='color: #52b788;'>Detalle por motivo de cierre</h3>
+<table style='width: 100%; border-collapse: collapse;'>
+<tr style='background-color: #1a2a4c;'>
+<th style='padding: 6px; border: 1px solid #00d4aa; text-align: left;'>Motivo</th>
+<th style='padding: 6px; border: 1px solid #00d4aa;'>Cantidad</th>
+</tr>
+{closure_rows}
+</table>
+"""
+
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Estadísticas del Trader")
+        dialog.setMinimumSize(620, 560)
+        dialog.setStyleSheet("background-color: #0f0f23; color: white;")
+
+        layout = QtWidgets.QVBoxLayout(dialog)
+
+        text_browser = QtWidgets.QTextBrowser()
+        text_browser.setHtml(stats_text)
         text_browser.setStyleSheet("""
             QTextBrowser {
                 background-color: #1a1a2e;
