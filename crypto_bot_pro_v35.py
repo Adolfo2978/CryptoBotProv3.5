@@ -87,6 +87,9 @@ print("Iniciando Crypto Bot Pro v35.0.0.0 - Version Mejorada con Senales Precisa
 # Importaciones estándar
 import asyncio
 import threading
+# Compatibilidad Python 3.12 + libs antiguas que usan Thread.isAlive()
+if not hasattr(threading.Thread, 'isAlive'):
+    threading.Thread.isAlive = threading.Thread.is_alive
 import pickle
 import logging
 import json
