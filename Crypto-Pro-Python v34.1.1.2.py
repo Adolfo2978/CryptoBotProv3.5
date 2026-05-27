@@ -186,7 +186,6 @@ logging.getLogger('urllib3.connectionpool').setLevel(logging.ERROR)
 logging.getLogger('websocket').setLevel(logging.CRITICAL)
 
 logger = logging.getLogger('CryptoBotOptimized')
-NETWORK_SUPPRESS_BLACKLIST_UNTIL = 0
 # Solo registra fallos (WARNING, ERROR, CRITICAL)
 # Importaciones numéricas y científicas
 import numpy as np
@@ -2378,7 +2377,7 @@ class SignalChartGenerator:
                 filename = f"temp_{symbol}.png"
 
             filepath = os.path.join(self.directorio_graficos, filename)
-            plt.savefig(filepath, dpi=150, facecolor='#0f0f23', edgecolor='none', bbox_inches='tight')
+            plt.savefig(filepath, dpi=150, facecolor='#0f0f23', edgecolor='none', bbox_inches='tight', quality=95)
             plt.close(fig)
             plt.close('all')
 
@@ -6658,16 +6657,10 @@ class OptimizedTelegramClient:
                 total=3,
                 backoff_factor=1,
                 status_forcelist=[429, 500, 502, 503, 504],
-                allowed_methods=frozenset(['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS']),
-                raise_on_status=False,
             )
-            adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=50, pool_maxsize=100)
+            adapter = HTTPAdapter(max_retries=retry_strategy)
             self.session.mount("https://", adapter)
             self.session.mount("http://", adapter)
-            try:
-                self.session.headers.update({'Connection': 'keep-alive'})
-            except Exception:
-                pass
 
         # Control de rate limiting
         self.last_message_time = 0
@@ -6681,27 +6674,6 @@ class OptimizedTelegramClient:
         self.message_queue = queue.Queue(maxsize=100)
         self.processing_thread = None
         self._start_message_processor()
-
-    def _reset_session(self):
-        if REQUESTS_AVAILABLE:
-            try:
-                self.session = requests.Session()
-                retry_strategy = Retry(
-                    total=3,
-                    backoff_factor=1,
-                    status_forcelist=[429, 500, 502, 503, 504],
-                    allowed_methods=frozenset(['GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS']),
-                    raise_on_status=False,
-                )
-                adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=50, pool_maxsize=100)
-                self.session.mount("https://", adapter)
-                self.session.mount("http://", adapter)
-                try:
-                    self.session.headers.update({'Connection': 'keep-alive'})
-                except Exception:
-                    pass
-            except Exception:
-                self.session = None
 
     def _escape_html(self, text: str) -> str:
         """
@@ -6912,12 +6884,6 @@ class OptimizedTelegramClient:
             except Exception as e:
                 last_error = f"{type(e).__name__}: {e}"
                 logger.warning(f"⚠️ Telegram intento {attempt}/{max_retries} fallido: {last_error}")
-                try:
-                    if 'ConnectionResetError' in last_error or 'Connection aborted' in last_error:
-                        self._reset_session()
-                        time.sleep(1)
-                except Exception:
-                    pass
 
             # Esperar antes del siguiente intento (backoff exponencial)
             if attempt < max_retries:
@@ -7469,19 +7435,7 @@ class APIPollingFallback:
         self.polling_interval = polling_interval
         self._stop_event = threading.Event()
         self.thread = None
-        _env_eps = os.environ.get('BINANCE_KLINES_ENDPOINTS', '').strip()
-        if _env_eps:
-            _parsed = [e.strip() for e in _env_eps.split(',') if e.strip()]
-            self.endpoints = _parsed if _parsed else ["https://api.binance.com/api/v3/klines", "https://data-api.binance.vision/api/v3/klines"]
-        else:
-            self.endpoints = ["https://api.binance.com/api/v3/klines", "https://data-api.binance.vision/api/v3/klines"]
-        self._endpoint_index = 0
-        self.session = None
-        if REQUESTS_AVAILABLE:
-            self.session = requests.Session()
-            _retry = Retry(total=3, connect=3, read=3, backoff_factor=0.5, status_forcelist=[429, 500, 502, 503, 504])
-            _adapter = HTTPAdapter(max_retries=_retry)
-            self.session.mount("https://", _adapter)
+        self.base_url = "https://data-api.binance.vision/api/v3/klines"
 
     def _fetch_kline(self):
         try:
@@ -7490,38 +7444,25 @@ class APIPollingFallback:
                 'interval': self.intervalo,
                 'limit': 1  # Solo la última vela
             }
-            last_error = None
-            for _ in range(len(self.endpoints)):
-                url = self.endpoints[self._endpoint_index]
-                try:
-                    if self.session is not None:
-                        response = self.session.get(url, params=params, timeout=30)
-                    else:
-                        response = requests.get(url, params=params, timeout=30)
-                    response.raise_for_status()
-                    data = response.json()
-                    if data:
-                        kline_data = data[0]
-                        kline = {
-                            't': int(kline_data[0]),
-                            's': self.symbol,
-                            'o': kline_data[1],
-                            'h': kline_data[2],
-                            'l': kline_data[3],
-                            'c': kline_data[4],
-                            'v': kline_data[5],
-                            'i': self.intervalo,
-                            'x': True,
-                        }
-                        if self.callback:
-                            self.callback({'symbol': self.symbol, 'kline': kline})
-                        return
-                except Exception as e:
-                    last_error = e
-                    self._endpoint_index = (self._endpoint_index + 1) % len(self.endpoints)
-                    continue
-            if last_error:
-                raise last_error
+            response = requests.get(self.base_url, params=params, timeout=30)  # ✅ Aumentado para alta latencia
+            response.raise_for_status()
+            data = response.json()
+            if data:
+                kline_data = data[0]
+                # Formatear para que parezca un mensaje de WebSocket
+                kline = {
+                    't': int(kline_data[0]),      # Open time
+                    's': self.symbol,           # Symbol
+                    'o': kline_data[1],          # Open price
+                    'h': kline_data[2],          # High price
+                    'l': kline_data[3],          # Low price
+                    'c': kline_data[4],          # Close price
+                    'v': kline_data[5],          # Volume
+                    'i': self.intervalo,         # Interval
+                    'x': True,                   # Is this kline closed?
+                }
+                if self.callback:
+                    self.callback({'symbol': self.symbol, 'kline': kline})
         except Exception as e:
             logger.error(f"Error en API Polling Fallback para {self.symbol}: {e}")
 
@@ -7813,10 +7754,6 @@ class RobustWebSocketManager:
             elif 'result' in datos:
                 # Respuesta a suscripción
                 logger.info("Suscripción WebSocket exitosa")
-                try:
-                    NETWORK_SUPPRESS_BLACKLIST_UNTIL = 0
-                except Exception:
-                    pass
 
         except json.JSONDecodeError as e:
             logger.error(f"No se pudo parsear mensaje WebSocket: {e}")
@@ -7837,10 +7774,6 @@ class RobustWebSocketManager:
             logger.warning(f"🔌 Conexión reset por host remoto. Intentando reconectar...")
         elif '11001' in error_str:
             logger.warning(f"📡 Error DNS (sin conexión). Esperando red...")
-            try:
-                NETWORK_SUPPRESS_BLACKLIST_UNTIL = time.time() + 600
-            except Exception:
-                pass
         elif 'ping/pong timed out' in error_str:
             logger.debug(f"⏱️ Timeout ping/pong. Posible lag de red. Aumentando tolerancia...")
         else:
@@ -8948,62 +8881,6 @@ class SignalTracker:
                 'profit_percent': profit_percent,
                 'duration_minutes': (datetime.now() - tracking['start_time']).total_seconds() / 60
             }
-
-            # ✅ GUARDAR TRADE EXITOSO EN HISTORIAL (Fix solicitado)
-            # Se guarda si profit >= 1.0% o si la razón es explícitamente target alcanzado
-            if (profit_percent >= 1.0 or reason in ["PROFIT_TARGET", "target_reached"]):
-                if hasattr(self, '_similarity_engine_ref') and self._similarity_engine_ref:
-                    try:
-                        logger.info(f"💾 Intentando guardar trade exitoso: {symbol} | Profit: {profit_percent:.2f}%")
-                        self._similarity_engine_ref.save_successful_trade(
-                            symbol=symbol,
-                            signal_type=signal_data.get('signal_type', 'UNKNOWN'),
-                            entry_price=entry_price,
-                            exit_price=current_price,
-                            profit_percent=profit_percent,
-                            duration_minutes=report['duration_minutes']
-                        )
-                    except Exception as e:
-                        logger.error(f"❌ Error guardando trade exitoso {symbol} via Engine: {e}", exc_info=True)
-                else:
-                    # ⚠️ FALLBACK: Si no hay referencia al motor, guardar manualmente
-                    logger.warning(f"⚠️ _similarity_engine_ref no disponible en SignalTracker. Usando FALLBACK para guardar {symbol}")
-                    try:
-                        import hashlib
-                        import json
-                        import os
-                        
-                        # Intentar obtener ruta desde config
-                        save_dir = getattr(self.config, 'TRAINING_SUCCESS_DIR', None)
-                        if not save_dir:
-                            # Ruta hardcoded de emergencia
-                            base_dir = os.path.dirname(os.path.abspath(__file__)) if '__file__' in locals() else os.getcwd()
-                            save_dir = os.path.join(base_dir, 'CryptoBotPro_Data', 'training_data', 'successful_trades')
-                        
-                        os.makedirs(save_dir, exist_ok=True)
-                        
-                        signal_hash_id = hashlib.md5(f"{symbol}_{datetime.now().isoformat()}".encode()).hexdigest()[:12]
-                        path = os.path.join(save_dir, f"{signal_hash_id}.json")
-                        
-                        data = {
-                            'signal_hash': signal_hash_id,
-                            'symbol': symbol,
-                            'signal_type': str(signal_data.get('signal_type', 'UNKNOWN')),
-                            'entry_price': entry_price,
-                            'exit_price': current_price,
-                            'final_profit_percent': profit_percent,
-                            'duration_minutes': report['duration_minutes'],
-                            'is_success': True,
-                            'timestamp': datetime.now().isoformat(),
-                            'saved_via': 'fallback'
-                        }
-                        
-                        with open(path, 'w', encoding='utf-8') as f:
-                            json.dump(data, f, indent=2)
-                        logger.info(f"💾 [FALLBACK] Trade guardado exitosamente en: {path}")
-                        
-                    except Exception as ex:
-                        logger.error(f"❌ FALLA TOTAL guardando trade {symbol}: {ex}", exc_info=True)
 
             del self.tracked_signals[signal_hash]
             logger.info(f"❌ Señal {symbol} ({signal_hash[:8]}) cerrada: {reason} | Profit: {profit_percent:+.2f}%")
@@ -10446,12 +10323,6 @@ class OptimizedTradingBot:
         Si alcanza el umbral, el símbolo entra en blacklist temporal.
         """
         current_time = time.time()
-        try:
-            if current_time < NETWORK_SUPPRESS_BLACKLIST_UNTIL:
-                logger.debug(f"[BLACKLIST] {symbol}: Supresión por red inestable ({reason})")
-                return
-        except Exception:
-            pass
 
         if symbol not in self._data_failure_blacklist:
             self._data_failure_blacklist[symbol] = {'failures': 0, 'last_attempt': 0}
@@ -10794,7 +10665,7 @@ class OptimizedTradingBot:
                     print(diag_msg)  # También imprimir en consola para Replit
 
             # ✅ CORREGIDO: VERIFICAR ALINEACIÓN ANTES DE GENERAR SEÑAL PREMIUM
-            # CRÍTICO: Si IA dice COMPRA pero t��cnico dice VENTA = DESALINEADO (NO PREMIUM)
+            # CRÍTICO: Si IA dice COMPRA pero técnico dice VENTA = DESALINEADO (NO PREMIUM)
             if base_neural >= min_neural and tech_pct >= min_technical and align_pct >= min_alignment:
                 # ✅ v32.0.22.4: VALIDAR PATRÓN DE VELA CONFIRMATORIO
                 candle_pattern = validation_result.get('candle_pattern', {})
@@ -15267,3 +15138,5 @@ if __name__ == "__main__":
     else:
         # ===== MODO CONSOLA (Replit/Linux sin GUI) =====
         main_backend()
+
+
